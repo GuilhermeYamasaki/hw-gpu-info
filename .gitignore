@@ -1,0 +1,29 @@
+# Dados locais gerados pelo app (histórico pessoal de sessões)
+historico_jogos.json
+historico_jogos.json.tmp
+*.tmp
+*.log
+hw-gpu-monitor.desktop
+
+# Cache e artefatos do Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Ambientes virtuais
+.venv/
+venv/
+env/
+
+# Editores / IDEs / SO
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.directory
