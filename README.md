@@ -1,6 +1,6 @@
 # HW GPU Monitor
 
-Monitor de GPU estilo **HWMonitor** feito em **Python + PySide6 (Qt6)** para Linux / Nobara OS, usando leitura nativa dos sensores `amdgpu` (`sysfs/hwmon`) sem necessidade de `sudo`.
+Monitor de GPU estilo **HWMonitor** feito em **Python + PySide6 (Qt6)** para Linux (Bazzite OS, Nobara OS e outras distros), usando leitura nativa dos sensores `amdgpu` (`sysfs/hwmon`) sem necessidade de `sudo`.
 
 ## O que monitora
 - **Temperaturas (Atual / Mín / Máx):** GPU (Edge), Hotspot (Junction) e Memória (VRAM)
@@ -16,18 +16,26 @@ Monitor de GPU estilo **HWMonitor** feito em **Python + PySide6 (Qt6)** para Lin
 - **Histórico automático de jogos da Steam:** detecta quando um jogo da Steam abre e fecha, calcula a média/máxima separada daquela sessão e salva automaticamente em `historico_jogos.json` (acessível pelo botão **Histórico**)
 - **Exportação JSON:** botão **JSON** copia todas as métricas atuais, mínimas, médias e máximas para a área de transferência
 
+## Instalação (Bazzite, Nobara ou qualquer Linux)
+
+Rode uma única vez (sem `sudo`):
+
+```bash
+bash install.sh
+```
+
+Isso cria o ambiente virtual local (`.venv`), instala o `PySide6` e adiciona o atalho **HW GPU Monitor** no menu do sistema.
+
+Se quiser que ele também inicie automaticamente ao ligar o PC:
+
+```bash
+bash install.sh --autostart
+```
+
 ## Como executar
+
+Pelo menu do sistema (**HW GPU Monitor**) ou via terminal:
 
 ```bash
 ./run.sh
-```
-ou:
-```bash
-python3 main.py
-```
-
-## Criar atalho no menu do Nobara / KDE
-
-```bash
-cp hw-gpu-monitor.desktop ~/.local/share/applications/
 ```
