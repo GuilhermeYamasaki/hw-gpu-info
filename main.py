@@ -7,9 +7,9 @@ import json
 import sys
 import time
 from collections import deque
-from typing import Callable, Deque, Dict, Optional, Tuple
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QBrush,
@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMenu,
+    QMessageBox,
     QPushButton,
     QSystemTrayIcon,
     QTableWidget,
@@ -156,6 +157,32 @@ QPushButton:hover {
 
 QPushButton:pressed {
     background-color: #1f2836;
+}
+
+QPushButton:disabled {
+    background-color: #1c212b;
+    color: #5c6570;
+    border: 1px solid #2b3240;
+}
+
+QPushButton#DangerButton {
+    background-color: #4a191c;
+    color: #ff7b72;
+    border: 1px solid #9e2a2b;
+}
+
+QPushButton#DangerButton:hover {
+    background-color: #632226;
+}
+
+QPushButton#DangerButton:pressed {
+    background-color: #3a1215;
+}
+
+QPushButton#DangerButton:disabled {
+    background-color: #1c212b;
+    color: #5c6570;
+    border: 1px solid #2b3240;
 }
 
 QComboBox {
@@ -406,8 +433,9 @@ class HistoryDialog(QDialog):
     def __init__(self, tracker: GameSessionTracker, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.tracker = tracker
+        self._records: List[Dict[str, Any]] = []
         self.setWindowTitle("Histórico de Jogos (Steam)")
-        self.resize(780, 360)
+        self.resize(880, 380)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 10)
@@ -417,14 +445,18 @@ class HistoryDialog(QDialog):
         self.info_lbl.setObjectName("GpuSub")
         layout.addWidget(self.info_lbl)
 
-        self.table = QTableWidget(0, 10)
+        self.table = QTableWidget(0, 11)
         self.table.setHorizontalHeaderLabels(
-            ["Data", "Jogo", "Duração", "GPU Méd", "GPU P95", "GPU ±σ", "GPU Máx", "Hotspot", "Fan Máx", "Clock Méd"]
+            ["Data", "Jogo", "Duração", "GPU Méd", "GPU P95", "GPU P98", "GPU ±σ", "GPU Máx", "Hotspot", "Fan Máx", "Clock Méd"]
         )
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.verticalHeader().setVisible(False)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._on_table_context_menu)
+        self.table.itemSelectionChanged.connect(self._update_buttons_state)
         self.table.setStyleSheet(
             "QTableWidget { background-color: #1c212b; alternate-background-color: #181c24; "
             "border: 1px solid #2b3240; border-radius: 8px; gridline-color: #262c38; }"
@@ -432,19 +464,29 @@ class HistoryDialog(QDialog):
 
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for col, width in ((0, 106), (2, 62), (3, 64), (4, 64), (5, 58), (6, 64), (7, 64), (8, 72), (9, 72)):
+        for col, width in ((0, 106), (2, 62), (3, 64), (4, 64), (5, 64), (6, 58), (7, 64), (8, 64), (9, 72), (10, 72)):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
             hdr.resizeSection(col, width)
         layout.addWidget(self.table, stretch=1)
 
         btns = QHBoxLayout()
-        self.copy_btn = QPushButton("Copiar JSON")
+        self.copy_selected_btn = QPushButton("Copiar 1 gameplay")
+        self.copy_selected_btn.setToolTip("Copiar o JSON apenas da gameplay selecionada na tabela")
+        self.copy_selected_btn.clicked.connect(self._copy_selected_json)
+
+        self.copy_btn = QPushButton("Copiar tudo (JSON)")
+        self.copy_btn.setToolTip("Copiar todo o histórico em JSON")
         self.copy_btn.clicked.connect(self._copy_json)
-        self.clear_btn = QPushButton("Limpar")
+
+        self.clear_btn = QPushButton("Apagar todo o histórico")
+        self.clear_btn.setObjectName("DangerButton")
+        self.clear_btn.setToolTip("Apaga permanentemente todas as sessões salvas no histórico")
         self.clear_btn.clicked.connect(self._clear_history)
+
         close_btn = QPushButton("Fechar")
         close_btn.clicked.connect(self.accept)
 
+        btns.addWidget(self.copy_selected_btn)
         btns.addWidget(self.copy_btn)
         btns.addWidget(self.clear_btn)
         btns.addStretch(1)
@@ -454,9 +496,9 @@ class HistoryDialog(QDialog):
         self._load_rows()
 
     def _load_rows(self) -> None:
-        records = self.tracker.load_history()
-        self.table.setRowCount(len(records))
-        for row_idx, rec in enumerate(records):
+        self._records = self.tracker.load_history()
+        self.table.setRowCount(len(self._records))
+        for row_idx, rec in enumerate(self._records):
             started = str(rec.get("started_at", ""))[:16].replace("T", " ")
             game = str(rec.get("game", "—"))
             dur = _fmt_duration(int(rec.get("duration_sec", 0)))
@@ -471,6 +513,7 @@ class HistoryDialog(QDialog):
                 dur,
                 _fmt(edge.get("avg"), "°C", 1),
                 _fmt(edge.get("p95"), "°C", 1),
+                _fmt(edge.get("p98"), "°C", 1),
                 _fmt_std(edge.get("std_dev"), 1),
                 _fmt(edge.get("max"), "°C", 1),
                 _fmt(junc.get("max"), "°C", 1),
@@ -483,15 +526,71 @@ class HistoryDialog(QDialog):
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(row_idx, col_idx, cell)
 
-    def _copy_json(self) -> None:
-        records = self.tracker.load_history()
+        if self._records:
+            self.table.selectRow(0)
+        self._update_buttons_state()
+
+    def _selected_record_index(self) -> Optional[int]:
+        sel_model = self.table.selectionModel()
+        if sel_model is not None:
+            rows = sel_model.selectedRows()
+            if rows:
+                row = rows[0].row()
+                if 0 <= row < len(self._records):
+                    return row
+            return None
+        row = self.table.currentRow()
+        if 0 <= row < len(self._records):
+            return row
+        return None
+
+    def _update_buttons_state(self) -> None:
+        has_records = len(self._records) > 0
+        has_selection = self._selected_record_index() is not None
+        self.copy_selected_btn.setEnabled(has_selection)
+        self.copy_btn.setEnabled(has_records)
+        self.clear_btn.setEnabled(has_records)
+
+    def _copy_selected_json(self) -> None:
+        idx = self._selected_record_index()
+        if idx is None:
+            return
         clipboard = QApplication.clipboard()
         if clipboard is not None:
-            clipboard.setText(json.dumps(records, indent=2, ensure_ascii=False))
-        self.copy_btn.setText("Copiado!")
-        QTimer.singleShot(1500, lambda: self.copy_btn.setText("Copiar JSON"))
+            clipboard.setText(json.dumps(self._records[idx], indent=2, ensure_ascii=False))
+        self.copy_selected_btn.setText("Gameplay copiada!")
+        QTimer.singleShot(1500, self, lambda: self.copy_selected_btn.setText("Copiar 1 gameplay"))
+
+    def _copy_json(self) -> None:
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(json.dumps(self._records, indent=2, ensure_ascii=False))
+        self.copy_btn.setText("Tudo copiado!")
+        QTimer.singleShot(1500, self, lambda: self.copy_btn.setText("Copiar tudo (JSON)"))
+
+    def _on_table_context_menu(self, pos: QPoint) -> None:
+        item = self.table.itemAt(pos)
+        if item is None:
+            return
+        self.table.selectRow(item.row())
+        menu = QMenu(self)
+        copy_one_action = QAction("Copiar JSON desta gameplay", self)
+        copy_one_action.triggered.connect(self._copy_selected_json)
+        menu.addAction(copy_one_action)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
 
     def _clear_history(self) -> None:
+        if not self._records:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Apagar todo o histórico",
+            f"Tem certeza que deseja apagar todas as {len(self._records)} gameplays salvas no histórico?\nEsta ação não pode ser desfeita.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
         self.tracker.clear_history()
         self._load_rows()
 
@@ -509,8 +608,8 @@ class GpuMonitorWindow(QMainWindow):
         self.tray_icon: Optional[QSystemTrayIcon] = None
 
         self.setWindowTitle("HW GPU Monitor")
-        self.resize(650, 520)
-        self.setMinimumSize(580, 440)
+        self.resize(700, 520)
+        self.setMinimumSize(620, 440)
 
         self._build_ui()
         self._populate_tree()
@@ -590,10 +689,10 @@ class GpuMonitorWindow(QMainWindow):
         chart_layout.addWidget(self.temp_chart)
         root.addWidget(chart_card)
 
-        # Tabela estilo HWMonitor (Sensor | Atual | Mín | Méd | P95 | ±σ | Máx)
+        # Tabela estilo HWMonitor (Sensor | Atual | Mín | Méd | P95 | P98 | ±σ | Máx)
         self.tree = QTreeWidget()
-        self.tree.setColumnCount(7)
-        self.tree.setHeaderLabels(["Sensor", "Atual", "Mín", "Méd", "P95", "±σ", "Máx"])
+        self.tree.setColumnCount(8)
+        self.tree.setHeaderLabels(["Sensor", "Atual", "Mín", "Méd", "P95", "P98", "±σ", "Máx"])
         self.tree.setAlternatingRowColors(True)
         self.tree.setRootIsDecorated(True)
         self.tree.setIndentation(14)
@@ -604,8 +703,9 @@ class GpuMonitorWindow(QMainWindow):
         if header_item is not None:
             header_item.setTextAlignment(0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             header_item.setToolTip(4, "Percentil 95: 95% das leituras ficaram abaixo deste valor")
-            header_item.setToolTip(5, "Desvio padrão (±σ): mede a oscilação em torno da média")
-        for col, width in ((1, 68), (2, 68), (3, 68), (4, 68), (5, 56), (6, 68)):
+            header_item.setToolTip(5, "Percentil 98: 98% das leituras ficaram abaixo deste valor")
+            header_item.setToolTip(6, "Desvio padrão (±σ): mede a oscilação em torno da média")
+        for col, width in ((1, 64), (2, 64), (3, 64), (4, 64), (5, 64), (6, 54), (7, 64)):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
             hdr.resizeSection(col, width)
             if header_item is not None:
@@ -741,7 +841,7 @@ class GpuMonitorWindow(QMainWindow):
             self._quit_app()
 
     def _add_group(self, name: str) -> QTreeWidgetItem:
-        group = QTreeWidgetItem(self.tree, [name, "", "", "", "", "", ""])
+        group = QTreeWidgetItem(self.tree, [name, "", "", "", "", "", "", ""])
         font = QFont()
         font.setBold(True)
         group.setFont(0, font)
@@ -757,8 +857,8 @@ class GpuMonitorWindow(QMainWindow):
         formatter: Callable[[Optional[float]], str],
         std_decimals: int = 1,
     ) -> None:
-        item = QTreeWidgetItem(parent, [label, "—", "—", "—", "—", "—", "—"])
-        for col in (1, 2, 3, 4, 5, 6):
+        item = QTreeWidgetItem(parent, [label, "—", "—", "—", "—", "—", "—", "—"])
+        for col in (1, 2, 3, 4, 5, 6, 7):
             item.setTextAlignment(col, Qt.AlignmentFlag.AlignCenter)
         self._rows[key] = (item, formatter, std_decimals)
 
@@ -851,14 +951,14 @@ class GpuMonitorWindow(QMainWindow):
         edge_stat: MetricStats = self.monitor.stats["temp_edge"]
         self.temp_card.set_data(
             _fmt(snap.temp_edge, "°C", 1),
-            f"Méd {_fmt(edge_stat.avg_val, '°C', 0)} · P95 {_fmt(edge_stat.p95_val, '°C', 0)} · Máx {_fmt(edge_stat.max_val, '°C', 0)}",
+            f"Méd {_fmt(edge_stat.avg_val, '°C', 0)} · P95 {_fmt(edge_stat.p95_val, '°C', 0)} · P98 {_fmt(edge_stat.p98_val, '°C', 0)} · Máx {_fmt(edge_stat.max_val, '°C', 0)}",
             _temp_color(snap.temp_edge).name(),
         )
 
         sclk_stat = self.monitor.stats["clock_sclk_mhz"]
         self.clock_card.set_data(
             _fmt(snap.clock_sclk_mhz, "MHz", 0),
-            f"P95 {_fmt(sclk_stat.p95_val, 'MHz', 0)} · Máx {_fmt(sclk_stat.max_val, 'MHz', 0)}",
+            f"P95 {_fmt(sclk_stat.p95_val, 'MHz', 0)} · P98 {_fmt(sclk_stat.p98_val, 'MHz', 0)} · Máx {_fmt(sclk_stat.max_val, 'MHz', 0)}",
             "#79c0ff",
         )
 
@@ -881,14 +981,16 @@ class GpuMonitorWindow(QMainWindow):
             item.setText(2, formatter(stat.min_val))
             item.setText(3, formatter(stat.avg_val))
             item.setText(4, formatter(stat.p95_val))
-            item.setText(5, _fmt_std(stat.std_dev, std_dec))
-            item.setText(6, formatter(stat.max_val))
+            item.setText(5, formatter(stat.p98_val))
+            item.setText(6, _fmt_std(stat.std_dev, std_dec))
+            item.setText(7, formatter(stat.max_val))
 
             if key.startswith("temp_"):
                 item.setForeground(1, _temp_color(stat.current))
                 item.setForeground(3, _temp_color(stat.avg_val))
                 item.setForeground(4, _temp_color(stat.p95_val))
-                item.setForeground(6, _temp_color(stat.max_val))
+                item.setForeground(5, _temp_color(stat.p98_val))
+                item.setForeground(7, _temp_color(stat.max_val))
 
         self._update_game_session(snap)
         self._update_tray(snap, fan_status)
@@ -914,9 +1016,10 @@ class GpuMonitorWindow(QMainWindow):
             dur = _fmt_duration(active.duration_seconds())
             avg_t = _fmt(active.stats["temp_edge"].avg_val, "°C", 1)
             p95_t = _fmt(active.stats["temp_edge"].p95_val, "°C", 1)
+            p98_t = _fmt(active.stats["temp_edge"].p98_val, "°C", 1)
             max_t = _fmt(active.stats["temp_edge"].max_val, "°C", 1)
             self.game_banner_lbl.setText(
-                f"Steam · {active.game_name} · {dur} · GPU Méd {avg_t} · P95 {p95_t} · Máx {max_t}"
+                f"Steam · {active.game_name} · {dur} · GPU Méd {avg_t} · P95 {p95_t} · P98 {p98_t} · Máx {max_t}"
             )
             self.game_banner.setVisible(True)
         else:

@@ -19,7 +19,7 @@ MAX_PERCENTILE_SAMPLES = 7200  # ~2h a 1 leitura/s
 
 @dataclass
 class MetricStats:
-    """Armazena valor atual, mínimo, médio, P95, desvio padrão (±σ) e máximo."""
+    """Armazena valor atual, mínimo, médio, P95, P98, desvio padrão (±σ) e máximo."""
 
     current: Optional[float] = None
     min_val: Optional[float] = None
@@ -42,13 +42,20 @@ class MetricStats:
             return None
         return math.sqrt(max(0.0, self._m2 / self._count))
 
-    @property
-    def p95_val(self) -> Optional[float]:
+    def percentile(self, p: float) -> Optional[float]:
         n = len(self._sorted)
         if n == 0:
             return None
-        idx = min(n - 1, max(0, math.ceil(0.95 * n) - 1))
+        idx = min(n - 1, max(0, math.ceil(p * n) - 1))
         return self._sorted[idx]
+
+    @property
+    def p95_val(self) -> Optional[float]:
+        return self.percentile(0.95)
+
+    @property
+    def p98_val(self) -> Optional[float]:
+        return self.percentile(0.98)
 
     def update(self, value: Optional[float]) -> None:
         self.current = value
@@ -67,7 +74,7 @@ class MetricStats:
         if self.max_val is None or value > self.max_val:
             self.max_val = value
 
-        # Janela ordenada para P95 em O(log N)
+        # Janela ordenada para P95/P98 em O(log N)
         if len(self._window) == self._window.maxlen:
             oldest = self._window[0]
             pos = bisect.bisect_left(self._sorted, oldest)
@@ -358,6 +365,7 @@ class AmdGpuMonitor:
                 "min": _r(st.min_val, digits),
                 "avg": _r(st.avg_val, digits),
                 "p95": _r(st.p95_val, digits),
+                "p98": _r(st.p98_val, digits),
                 "std_dev": _r(st.std_dev, 1 if digits == 0 else digits),
                 "max": _r(st.max_val, digits),
                 "samples": st._count,
